@@ -31,7 +31,7 @@ Expected output:
 
 Expected output:
 - Nhan du lieu dung schema Admin API
-
+   
 ## Day 3 - Tao product theo input
 
 1. Them form input `title`
