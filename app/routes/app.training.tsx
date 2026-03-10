@@ -51,10 +51,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
+  const metafieldNamespace = "$app";
+  const metafieldKey = "training_note_v2";
 
   if (intent === "create-product") {
-    const createdAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-    const productTitle = `Training Board ${createdAt}`;
+    const rawTitle = formData.get("title");
+
+    if (typeof rawTitle !== "string") {
+      return {
+        step: "create-product",
+        errors: [{ message: "Title must be a string" }],
+      };
+    }
+
+    const title = rawTitle.trim();
+
+    if (!title) {
+      return {
+        step: "create-product",
+        errors: [{ message: "Title is required" }],
+      };
+    }
 
     const createResponse = await admin.graphql(
       `#graphql
@@ -78,7 +95,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       {
         variables: {
           product: {
-            title: productTitle,
+            title: title,
             tags: ["training", "shopify-app"],
           },
         },
@@ -115,6 +132,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               key
               namespace
               value
+              jsonValue
             }
             userErrors {
               field
@@ -128,10 +146,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           metafields: [
             {
               ownerId: productId,
-              namespace: "$app",
-              key: "training_note",
-              type: "single_line_text_field",
-              value: "This product was updated from /app/training",
+              namespace: metafieldNamespace,
+              key: metafieldKey,
+              type: "json",
+              value: JSON.stringify({
+                source: "/app/training",
+                level: "day-4",
+                updatedAt: new Date().toISOString(),
+              }),
             },
           ],
         },
@@ -145,7 +167,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return {
       step: "set-metafield",
       metafields,
+      namespace: metafieldNamespace,
+      key: metafieldKey,
       errors: metafieldErrors,
+    };
+  }
+
+  if (intent === "read-metafield") {
+    const productId = formData.get("productId");
+
+    if (!productId || typeof productId !== "string") {
+      return {
+        step: "read-metafield",
+        errors: [{ message: "Missing productId" }],
+      };
+    }
+
+    const readMetafieldResponse = await admin.graphql(
+      `#graphql
+        query ReadTrainingMetafield($id: ID!, $namespace: String!, $key: String!) {
+          product(id: $id) {
+            id
+            title
+            metafield(namespace: $namespace, key: $key) {
+              id
+              namespace
+              key
+              type
+              value
+              jsonValue
+              updatedAt
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          id: productId,
+          namespace: metafieldNamespace,
+          key: metafieldKey,
+        },
+      },
+    );
+
+    const readMetafieldJson = await readMetafieldResponse.json();
+
+    return {
+      step: "read-metafield",
+      product: readMetafieldJson.data?.product ?? null,
+      namespace: metafieldNamespace,
+      key: metafieldKey,
+      errors: [],
     };
   }
 
@@ -171,6 +243,10 @@ export default function TrainingPage() {
 
     if (fetcher.data?.step === "set-metafield" && (fetcher.data?.errors?.length ?? 0) === 0) {
       shopify.toast.show("Metafield saved");
+    }
+
+    if (fetcher.data?.step === "read-metafield" && (fetcher.data?.errors?.length ?? 0) === 0) {
+      shopify.toast.show("Metafield fetched");
     }
   }, [fetcher.data, shopify]);
 
@@ -207,6 +283,7 @@ export default function TrainingPage() {
       <s-section heading="Step 2 - Create training product">
         <fetcher.Form method="post">
           <input type="hidden" name="intent" value="create-product" />
+          <input name="title" placeholder="Product title" required={true}/>
           <s-button type="submit" {...(isSubmitting ? { loading: true } : {})}>
             Create product
           </s-button>
@@ -221,15 +298,32 @@ export default function TrainingPage() {
         )}
       </s-section>
 
-      <s-section heading="Step 3 - Set metafield on newest product">
+      <s-section heading="Day 4 - Write and read metafield">
         <fetcher.Form method="post">
           <input type="hidden" name="intent" value="set-metafield" />
           <input type="hidden" name="productId" value={products[0]?.id ?? ""} />
           <s-button type="submit" variant="secondary" {...(isSubmitting ? { loading: true } : {})}>
-            Set metafield for latest product
+            Set JSON metafield for latest product
           </s-button>
         </fetcher.Form>
+
+        <fetcher.Form method="post">
+          <input type="hidden" name="intent" value="read-metafield" />
+          <input type="hidden" name="productId" value={products[0]?.id ?? ""} />
+          <s-button type="submit" variant="tertiary" {...(isSubmitting ? { loading: true } : {})}>
+            Read latest product metafield
+          </s-button>
+        </fetcher.Form>
+
         {fetcher.data?.step === "set-metafield" && (
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <pre style={{ margin: 0 }}>
+              <code>{JSON.stringify(fetcher.data, null, 2)}</code>
+            </pre>
+          </s-box>
+        )}
+
+        {fetcher.data?.step === "read-metafield" && (
           <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
             <pre style={{ margin: 0 }}>
               <code>{JSON.stringify(fetcher.data, null, 2)}</code>
